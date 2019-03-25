@@ -1,0 +1,11 @@
+.button {
+    -fx-padding: 10 20;
+}
+
+.toggle-button {
+    -fx-padding: 10 20;
+}
+
+.toggle-button:selected {
+    -fx-background-color: crimson;
+}
