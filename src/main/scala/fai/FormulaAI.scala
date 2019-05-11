@@ -1,12 +1,14 @@
 package fai
 
 import java.awt.Robot
-import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicLong
+import java.awt.event.KeyEvent
+import java.nio.file.Paths
+import java.util.concurrent.{ConcurrentLinkedDeque, Executors}
 import java.util.{Timer, TimerTask}
 
+import scala.collection.JavaConverters._
 import fai.capture.ScreenCaptor
-import fai.control.{ControlState, GamePadInput}
+import fai.control.{ControlState, KeyBoardOutPut}
 import org.slf4s.Logging
 import scalafx.Includes._
 import scalafx.application.JFXApp.PrimaryStage
@@ -23,14 +25,13 @@ import scalafx.scene.text.Text
 
 import scala.concurrent.{ExecutionContext, Future}
 
-object LearningDataMaker extends JFXApp with Logging {
+object FormulaAI extends JFXApp with Logging {
 
   val executor = Executors.newFixedThreadPool(30)
   implicit val ec = ExecutionContext.fromExecutor(executor)
   val robot = new Robot()
+  val keyboard = new KeyBoardOutPut(robot)
   var captor: Option[ScreenCaptor] = None
-
-  val imagesCounter = new AtomicLong(0)
 
   val conf: Config = pureconfig
     .loadConfig[Config]
@@ -38,62 +39,76 @@ object LearningDataMaker extends JFXApp with Logging {
       fa.toList.foreach(x => log.error(x.toString))
       sys.error("config error")
     }, identity)
-  log.info(conf.toString)
 
-  // prepare controller
-  val gamePadInput = new GamePadInput
+  val frameCount = 15
+  val predictor = new Predictor(conf.modelPath)
+  predictor.warmingUp()
+  private[this] val framesData = new ConcurrentLinkedDeque[Array[Float]]()
 
   val writableImage = new WritableImage(224, 224)
 
   // data capture scheduler
   val captureIntervalMilliSec = 50 // 1 / 20 sec.
-  val maxCaptureCount = 30 * (/* 1 min. */ 60 * 20)
+
   val scheduler = new Timer()
   scheduler.schedule(new TimerTask {
     def run(): Unit = {
-      val stateLong = gamePadInput.getState()
-      val cs = new ControlState(stateLong)
-
-      val captureStart = System.currentTimeMillis()
-
       // capture
       captor.foreach { x =>
         Future {
           val image = x.createScreenCapture()
           val resized = ImageUtils.resizeImage(image)
+          framesData.addLast(Predictor.toByteArray(resized))
           Platform.runLater {
-            infoText.text = s"executionTime: ${System.currentTimeMillis() - captureStart}"
             imageView.setImage(SwingFXUtils.toFXImage(resized, null))
-          }
-          if (recordToggle.selected.value && imagesCounter.getAndIncrement() < maxCaptureCount) {
-//            ImageIO.write(resized, "jpg", conf.dataPath.resolve(s"${imagesCounter.get()}_${cs.getState}.jpg").toFile)
-            Platform.runLater {
-              countText.text = s"data count: ${imagesCounter.get()}"
-            }
           }
         }
       }
+    }
+  }, 1000, captureIntervalMilliSec)
 
-      // show status
-      Platform.runLater {
-        controlText.text = s"state: ${cs.getState}, steering: ${cs.getSteering()}, throttle: ${cs.getThrottle()}, brake: ${cs.getBrake()}"
+  // AI scheduler
+  val predictIntervalMilliSec = 200
+  val aiScheduler = new Timer()
+  aiScheduler.schedule(new TimerTask {
+    def run(): Unit = {
+      val runStart = System.currentTimeMillis()
+      if (framesData.size() >= frameCount + 1 && predictor.isWarmedUp) {
+        val latestFrames = framesData.iterator().asScala.take(frameCount).toArray
+        while (framesData.size() > frameCount) {
+          framesData.removeFirst()
+        }
 
-        val steeringPosition = if (cs.getSteering() == ControlState.SteeringStraight) 0 else if (cs.getSteering() == ControlState.SteeringLeft) -1 else 1
-        val acceleration =  if (cs.getBrake()) -1 else if (cs.getThrottle()) 1 else 0
-        steeringBar.data = ObservableBuffer(
-          XYChart.Series[Number, String](
-            "",
-            ObservableBuffer(XYChart.Data[Number, String](steeringPosition, ""))
+        val result = predictor.predict(latestFrames)
+        val cs = new ControlState(result)
+
+        if (autoPilotToggle.selected.value) {
+          keyboard.updateKeyBoardState(cs)
+        } else {
+          keyboard.releaseAll()
+        }
+
+        // show status
+        Platform.runLater {
+          controlText.text = s"state: ${result}, steering: ${cs.getSteering()}, throttle: ${cs.getThrottle()}, brake: ${cs.getBrake()}"
+
+          val steeringPosition = if (cs.getSteering() == ControlState.SteeringStraight) 0 else if (cs.getSteering() == ControlState.SteeringLeft) -1 else 1
+          val acceleration =  if (cs.getBrake()) -1 else if (cs.getThrottle()) 1 else 0
+          steeringBar.data = ObservableBuffer(
+            XYChart.Series[Number, String](
+              "",
+              ObservableBuffer(XYChart.Data[Number, String](steeringPosition, ""))
+            )
           )
-        )
-        accelerationBar.data = ObservableBuffer(
-          XYChart.Series[String, Number](
-            "",
-            ObservableBuffer(XYChart.Data[String, Number]("", acceleration)),
+          accelerationBar.data = ObservableBuffer(
+            XYChart.Series[String, Number](
+              "",
+              ObservableBuffer(XYChart.Data[String, Number]("", acceleration)),
+            )
           )
-        )
+          infoText.text = s"executionTime: ${System.currentTimeMillis() - runStart}"
+        }
       }
-
     }
 
   }, 1000, captureIntervalMilliSec)
@@ -101,7 +116,9 @@ object LearningDataMaker extends JFXApp with Logging {
 
   override def stopApp() = {
     scheduler.cancel()
+    aiScheduler.cancel()
     executor.shutdown()
+    predictor.close()
   }
 
   val infoText = new Text("info")
@@ -120,14 +137,20 @@ object LearningDataMaker extends JFXApp with Logging {
     }
   }
 
-  val captureButton = new Button(text = "Start recording after 5 seconds") {
-    onAction = (e: ActionEvent) => Future {
-      Thread.sleep(5000)
-      recordToggle.fire()
+  val apReleaseButton = new Button(text = "AP Release") {
+    onAction = (e: ActionEvent) => {
+      autoPilotToggle.selected = false
     }
   }
 
-  val recordToggle = new ToggleButton("Record")
+  val apTimerButton = new Button(text = "Auto Pilot after 5 seconds") {
+    onAction = (e: ActionEvent) => Future {
+      Thread.sleep(5000)
+      autoPilotToggle.fire()
+    }
+  }
+
+  val autoPilotToggle = new ToggleButton("Auto Pilot")
 
   val imageView = new ImageView()
 
@@ -160,7 +183,7 @@ object LearningDataMaker extends JFXApp with Logging {
   }
 
  stage = new PrimaryStage {
-    title = "LearningDataMaker"
+    title = "Formula AI"
     width = 1000
     height = 1000
     scene = new Scene {
@@ -174,8 +197,9 @@ object LearningDataMaker extends JFXApp with Logging {
           controlText,
           accelerationBar,
           buildCaptorButton,
-          captureButton,
-          recordToggle,
+          apReleaseButton,
+          apTimerButton,
+          autoPilotToggle,
           imageView
         )
       }

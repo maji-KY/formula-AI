@@ -1,1 +1,2 @@
-data-dir = ""
+data-dir = "C:/f1/data"
+model-dir = "C:/f1/saved_model"

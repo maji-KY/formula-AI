@@ -10,7 +10,7 @@
     </appender>
 
     <logger name="fai">
-        <level value="trace" />
+        <level value="debug" />
     </logger>
 
     <root level="debug">

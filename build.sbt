@@ -6,7 +6,6 @@ scalaVersion := "2.12.8"
 
 scalacOptions ++= Seq("-feature", "-Xlint", "-Ywarn-numeric-widen", "-Ypartial-unification", "-language:higherKinds")
 javaOptions in run += """-Djava.library.path=lib"""""
-javaOptions in run += """-Djavacpp.platform="windows-x86_64""""
 
 classpathTypes += "maven-plugin"
 
@@ -17,8 +16,8 @@ libraryDependencies ++= Seq(
   "net.java.jinput" % "jinput" % "2.0.6",
   "net.java.dev.jna" % "jna-platform" % "5.2.0",
   "org.tensorflow" % "tensorflow" % tensorflowVersion,
-  "org.tensorflow" % "libtensorflow" % tensorflowVersion,
-  "org.tensorflow" % "libtensorflow_jni_gpu" % tensorflowVersion,
+  "org.tensorflow" % "libtensorflow" % tensorflowVersion, // enable gpu
+  "org.tensorflow" % "libtensorflow_jni_gpu" % tensorflowVersion, // enable gpu
   "org.tensorflow" % "proto" % tensorflowVersion,
   "com.github.pureconfig" %% "pureconfig" % "0.9.2",
   "org.slf4s" %% "slf4s-api" % "1.7.25",
