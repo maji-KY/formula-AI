@@ -7,6 +7,7 @@ import java.util.{Timer, TimerTask}
 
 import fai.capture.ScreenCaptor
 import fai.control.{ControlState, GamePadInput}
+import javax.imageio.ImageIO
 import org.slf4s.Logging
 import scalafx.Includes._
 import scalafx.application.JFXApp.PrimaryStage
@@ -66,7 +67,7 @@ object LearningDataMaker extends JFXApp with Logging {
             imageView.setImage(SwingFXUtils.toFXImage(resized, null))
           }
           if (recordToggle.selected.value && imagesCounter.getAndIncrement() < maxCaptureCount) {
-//            ImageIO.write(resized, "jpg", conf.dataPath.resolve(s"${imagesCounter.get()}_${cs.getState}.jpg").toFile)
+            ImageIO.write(resized, "jpg", conf.dataPath.resolve(s"${imagesCounter.get()}_${cs.getState}.jpg").toFile)
             Platform.runLater {
               countText.text = s"data count: ${imagesCounter.get()}"
             }
